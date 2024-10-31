@@ -1,4 +1,3 @@
-```markdown
 # Security Rules Library
 
 A flexible and extensible security rules engine for Go applications.
