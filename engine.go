@@ -86,11 +86,19 @@ func (e *Engine) evaluateRule(rule Rule, ctx *Context) (bool, error) {
 
 // matchUserRole checks if the user has the required role
 func (e *Engine) matchUserRole(ctx *Context, requiredRole interface{}) bool {
+	// Try array format first
 	if roles, ok := ctx.User()["roles"].([]string); ok {
 		for _, role := range roles {
 			if role == requiredRole.(string) {
 				return true
 			}
+		}
+	}
+
+	// Try single role format
+	if role, ok := ctx.User()["role"].(string); ok {
+		if role == requiredRole.(string) {
+			return true
 		}
 	}
 	return false
