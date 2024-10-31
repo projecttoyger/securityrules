@@ -1,3 +1,3 @@
 module github.com/projecttoyger/securityrules
 
-go 1.22.3
+go 1.23
