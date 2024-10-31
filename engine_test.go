@@ -56,7 +56,7 @@ func TestEngine_AddRule(t *testing.T) {
 func TestEngine_IsAllowed(t *testing.T) {
 	tests := []struct {
 		name     string
-		setup    func(*Engine)
+		setup    func(*Engine) error
 		context  *Context
 		resource string
 		action   string
@@ -65,8 +65,8 @@ func TestEngine_IsAllowed(t *testing.T) {
 	}{
 		{
 			name: "allowed for admin",
-			setup: func(e *Engine) {
-				e.AddRule(NewRule().
+			setup: func(e *Engine) error {
+				return e.AddRule(NewRule().
 					ForResource("documents").
 					WithAction("read").
 					WithEffect(Allow).
@@ -82,8 +82,8 @@ func TestEngine_IsAllowed(t *testing.T) {
 		},
 		{
 			name: "denied for non-admin",
-			setup: func(e *Engine) {
-				e.AddRule(NewRule().
+			setup: func(e *Engine) error {
+				return e.AddRule(NewRule().
 					ForResource("documents").
 					WithAction("read").
 					WithEffect(Allow).
@@ -99,8 +99,8 @@ func TestEngine_IsAllowed(t *testing.T) {
 		},
 		{
 			name: "nil context",
-			setup: func(e *Engine) {
-				e.AddRule(NewRule().
+			setup: func(e *Engine) error {
+				return e.AddRule(NewRule().
 					ForResource("documents").
 					WithAction("read").
 					WithEffect(Allow))
@@ -117,7 +117,9 @@ func TestEngine_IsAllowed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			engine := NewEngine()
 			if tt.setup != nil {
-				tt.setup(engine)
+				if err := tt.setup(engine); err != nil {
+					t.Fatalf("Setup failed: %v", err)
+				}
 			}
 
 			got, err := engine.IsAllowed(tt.resource, tt.action, tt.context)
@@ -244,7 +246,9 @@ func TestEngine_ResourceOwnerRule(t *testing.T) {
 		WithEffect(Allow).
 		WithCondition("resourceOwner", true)
 
-	engine.AddRule(rule)
+	if err := engine.AddRule(rule); err != nil {
+		t.Fatalf("Failed to add rule: %v", err)
+	}
 
 	tests := []struct {
 		name     string
