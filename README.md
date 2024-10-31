@@ -19,24 +19,35 @@ go get github.com/projecttoyger/securityrules
 ## Quick Start
 
 ```go
-engine := securityrules.NewEngine()
+	engine := securityrules.NewEngine()
 
-// Add a rule
-rule := securityrules.NewRule().
-    ForResource("documents").
-    WithAction("read").
-    WithEffect(securityrules.Allow).
-    WithCondition("userRole", "admin")
+	// Add a rule - check the error
+	rule := securityrules.NewRule().
+		ForResource("documents").
+		WithAction("read").
+		WithEffect(securityrules.Allow).
+		WithCondition("userRole", "admin")
 
-engine.AddRule(rule)
+	if err := engine.AddRule(rule); err != nil {
+		fmt.Printf("Error adding rule: %v\n", err)
+		return
+	}
 
-// Create context
-ctx := securityrules.NewContext().
-    WithUser(map[string]interface{}{"role": "admin"}).
-    WithResource(map[string]interface{}{"id": "doc1"})
+	// Create context - use "roles" as array
+	ctx := securityrules.NewContext().
+		WithUser(map[string]interface{}{
+			"roles": []string{"admin"},
+		}).
+		WithResource(map[string]interface{}{
+			"id": "doc1",
+		})
 
-// Check permission
-allowed, err := engine.IsAllowed("documents", "read", ctx)
+		// Check permission
+	allowed, err := engine.IsAllowed("documents", "read", ctx)
+	if err != nil {
+		fmt.Printf("Error checking permission: %v\n", err)
+		return
+	}
 ```
 
 ## Documentation
