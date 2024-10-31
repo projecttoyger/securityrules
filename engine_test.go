@@ -131,3 +131,151 @@ func TestEngine_IsAllowed(t *testing.T) {
 		})
 	}
 }
+
+func TestEngine_DefaultDeny(t *testing.T) {
+	engine := NewEngine()
+	ctx := NewContext()
+
+	// Test with no rules
+	allowed, err := engine.IsAllowed("resource", "action", ctx)
+	if err != nil {
+		t.Errorf("IsAllowed() error = %v, want nil", err)
+	}
+	if allowed {
+		t.Error("IsAllowed() should return false when no rules match")
+	}
+}
+
+func TestEngine_EvaluationErrors(t *testing.T) {
+	engine := NewEngine()
+
+	// Add a rule with userRole condition but no roles in context
+	rule := NewRule().
+		ForResource("test").
+		WithAction("action").
+		WithEffect(Allow).
+		WithCondition("userRole", "admin")
+
+	err := engine.AddRule(rule)
+	if err != nil {
+		t.Fatalf("Failed to add rule: %v", err)
+	}
+
+	// Create context without roles
+	ctx := NewContext().WithUser(map[string]interface{}{
+		"id": "user1", // No roles field
+	})
+
+	allowed, err := engine.IsAllowed("test", "action", ctx)
+	if err != nil {
+		t.Errorf("IsAllowed() unexpected error: %v", err)
+	}
+	if allowed {
+		t.Error("IsAllowed() should return false when role check fails")
+	}
+}
+
+func TestEngine_ResourceOwner(t *testing.T) {
+	tests := []struct {
+		name     string
+		context  *Context
+		expected bool
+	}{
+		{
+			name: "matching owner",
+			context: NewContext().
+				WithUser(map[string]interface{}{"id": "user1"}).
+				WithResource(map[string]interface{}{"owner": "user1"}),
+			expected: true,
+		},
+		{
+			name: "non-matching owner",
+			context: NewContext().
+				WithUser(map[string]interface{}{"id": "user1"}).
+				WithResource(map[string]interface{}{"owner": "user2"}),
+			expected: false,
+		},
+		{
+			name: "missing user id",
+			context: NewContext().
+				WithUser(map[string]interface{}{}).
+				WithResource(map[string]interface{}{"owner": "user1"}),
+			expected: false,
+		},
+		{
+			name: "missing resource owner",
+			context: NewContext().
+				WithUser(map[string]interface{}{"id": "user1"}).
+				WithResource(map[string]interface{}{}),
+			expected: false,
+		},
+		{
+			name: "nil user",
+			context: NewContext().
+				WithResource(map[string]interface{}{"owner": "user1"}),
+			expected: false,
+		},
+		{
+			name: "nil resource",
+			context: NewContext().
+				WithUser(map[string]interface{}{"id": "user1"}),
+			expected: false,
+		},
+	}
+
+	engine := NewEngine()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := engine.matchResourceOwner(tt.context)
+			if result != tt.expected {
+				t.Errorf("matchResourceOwner() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestEngine_ResourceOwnerRule(t *testing.T) {
+	engine := NewEngine()
+
+	// Add rule with resource owner condition
+	rule := NewRule().
+		ForResource("documents").
+		WithAction("read").
+		WithEffect(Allow).
+		WithCondition("resourceOwner", true)
+
+	engine.AddRule(rule)
+
+	tests := []struct {
+		name     string
+		context  *Context
+		expected bool
+	}{
+		{
+			name: "owner can access",
+			context: NewContext().
+				WithUser(map[string]interface{}{"id": "user1"}).
+				WithResource(map[string]interface{}{"owner": "user1"}),
+			expected: true,
+		},
+		{
+			name: "non-owner cannot access",
+			context: NewContext().
+				WithUser(map[string]interface{}{"id": "user1"}).
+				WithResource(map[string]interface{}{"owner": "user2"}),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			allowed, err := engine.IsAllowed("documents", "read", tt.context)
+			if err != nil {
+				t.Errorf("IsAllowed() error = %v", err)
+			}
+			if allowed != tt.expected {
+				t.Errorf("IsAllowed() = %v, want %v", allowed, tt.expected)
+			}
+		})
+	}
+}
