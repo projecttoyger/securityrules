@@ -126,23 +126,49 @@ func (e *Engine) registerDefaultEvaluators() {
 type roleEvaluator struct{}
 
 func (e *roleEvaluator) Evaluate(condition Condition, ctx *Context) (bool, error) {
-	requiredRole := condition.Value
+	requiredRoles, ok := condition.Value.([]interface{})
+	if !ok {
+		// Try single role case
+		if singleRole, ok := condition.Value.(string); ok {
+			requiredRoles = []interface{}{singleRole}
+		} else {
+			return false, fmt.Errorf("invalid role format in condition")
+		}
+	}
 
-	// Try array format first
-	if roles, ok := ctx.User()["roles"].([]string); ok {
-		for _, role := range roles {
-			if role == requiredRole.(string) {
-				return true, nil
+	userRoles, ok := ctx.User()["roles"].([]string)
+	if !ok {
+		// Try interface slice
+		if interfaceRoles, ok := ctx.User()["roles"].([]interface{}); ok {
+			userRoles = make([]string, len(interfaceRoles))
+			for i, v := range interfaceRoles {
+				if str, ok := v.(string); ok {
+					userRoles[i] = str
+				} else {
+					return false, fmt.Errorf("invalid role type in user context")
+				}
+			}
+		} else {
+			// Try single role
+			if role, ok := ctx.User()["role"].(string); ok {
+				userRoles = []string{role}
+			} else {
+				return false, fmt.Errorf("roles not found in context")
 			}
 		}
 	}
 
-	// Try single role format
-	if role, ok := ctx.User()["role"].(string); ok {
-		if role == requiredRole.(string) {
-			return true, nil
+	// Check if any of the user roles match any of the required roles
+	for _, userRole := range userRoles {
+		for _, reqRole := range requiredRoles {
+			if reqStr, ok := reqRole.(string); ok {
+				if userRole == reqStr {
+					return true, nil
+				}
+			}
 		}
 	}
+
 	return false, nil
 }
 
