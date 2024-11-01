@@ -19,48 +19,42 @@ type Rule struct {
 	Metadata    map[string]string    `json:"metadata"`    // Additional metadata
 }
 
-// Custom marshaling types
-type ruleAlias Rule
-
-type ruleJSON struct {
-	*ruleAlias
-	Type     string `json:"type"`
-	Severity string `json:"severity"`
-	Effect   string `json:"effect"`
-}
-
 // MarshalJSON implements the json.Marshaler interface
 func (r *Rule) MarshalJSON() ([]byte, error) {
-	type RuleJSON struct {
+	type Alias struct {
 		ID          string               `json:"id"`
 		Name        string               `json:"name"`
 		Description string               `json:"description"`
-		Type        string               `json:"type"`
-		Severity    string               `json:"severity"`
 		Resource    string               `json:"resource"`
 		Action      string               `json:"action"`
-		Effect      string               `json:"effect"`
 		Conditions  map[string]Condition `json:"conditions"`
 		Metadata    map[string]string    `json:"metadata"`
 	}
 
-	return json.Marshal(RuleJSON{
-		ID:          r.ID,
-		Name:        r.Name,
-		Description: r.Description,
-		Type:        string(r.Type),
-		Severity:    string(r.Severity),
-		Resource:    r.Resource,
-		Action:      r.Action,
-		Effect:      string(r.Effect),
-		Conditions:  r.Conditions,
-		Metadata:    r.Metadata,
+	return json.Marshal(&struct {
+		Alias
+		Type     string `json:"type"`
+		Severity string `json:"severity"`
+		Effect   string `json:"effect"`
+	}{
+		Alias: Alias{
+			ID:          r.ID,
+			Name:        r.Name,
+			Description: r.Description,
+			Resource:    r.Resource,
+			Action:      r.Action,
+			Conditions:  r.Conditions,
+			Metadata:    r.Metadata,
+		},
+		Type:     string(r.Type),
+		Severity: string(r.Severity),
+		Effect:   string(r.Effect),
 	})
 }
 
 // UnmarshalJSON implements the json.Unmarshaler interface
 func (r *Rule) UnmarshalJSON(data []byte) error {
-	type RuleJSON struct {
+	type Alias struct {
 		ID          string               `json:"id"`
 		Name        string               `json:"name"`
 		Description string               `json:"description"`
@@ -73,21 +67,21 @@ func (r *Rule) UnmarshalJSON(data []byte) error {
 		Metadata    map[string]string    `json:"metadata"`
 	}
 
-	var rj RuleJSON
-	if err := json.Unmarshal(data, &rj); err != nil {
+	aux := &Alias{}
+	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
 
-	r.ID = rj.ID
-	r.Name = rj.Name
-	r.Description = rj.Description
-	r.Type = RuleType(rj.Type)
-	r.Severity = Severity(rj.Severity)
-	r.Resource = rj.Resource
-	r.Action = rj.Action
-	r.Effect = Effect(rj.Effect)
-	r.Conditions = rj.Conditions
-	r.Metadata = rj.Metadata
+	r.ID = aux.ID
+	r.Name = aux.Name
+	r.Description = aux.Description
+	r.Type = RuleType(aux.Type)
+	r.Severity = Severity(aux.Severity)
+	r.Resource = aux.Resource
+	r.Action = aux.Action
+	r.Effect = Effect(aux.Effect)
+	r.Conditions = aux.Conditions
+	r.Metadata = aux.Metadata
 
 	// Initialize maps if they're nil
 	if r.Conditions == nil {
