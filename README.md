@@ -37,12 +37,11 @@ go get github.com/projecttoyger/securityrules
 		WithStructuredCondition("userRole", securityrules.Condition{
 			Type:      securityrules.RoleCondition,
 			Operation: securityrules.In,
-			Value:     []string{"admin", "editor"},
+			Value:     []interface{}{"admin", "editor"},
 			Message:   "User must be an admin or editor",
-		}).
-		WithMetadata("owner", "security-team")
+		})
 
-	// Add the rule to the engine
+	// Add that rule to the engine
 	if err := engine.AddRule(rule); err != nil {
 		fmt.Printf("Error adding rule: %v\n", err)
 		return
@@ -52,29 +51,15 @@ go get github.com/projecttoyger/securityrules
 	ctx := securityrules.NewContext().
 		WithUser(map[string]interface{}{
 			"id":    "user123",
-			"roles": []string{"editor"},
-		}).
-		WithResource(map[string]interface{}{
-			"id":    "doc1",
-			"owner": "user123",
-		}).
-		WithEnvironment(map[string]interface{}{
-			"time": time.Now(),
-			"ip":   "192.168.1.1",
+			"roles": []interface{}{scenario.role},
 		})
 	
 	// Check permission
 	allowed, err := engine.IsAllowed("documents", "read", ctx)
-	if err != nil {
-		fmt.Printf("Error checking permission: %v\n", err)
-		return
-	}
-
-	if allowed {
-		fmt.Println("Access granted!")
-	} else {
-		fmt.Println("Access denied.")
-	}
+		if err != nil {
+			fmt.Printf("Error checking permission: %v\n", err)
+			continue
+		}
 ```
 
 ## Documentation
