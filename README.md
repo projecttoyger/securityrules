@@ -15,7 +15,6 @@ The Rule type represents a security policy rule that can be used to control acce
 
 ## Installation
 
-
 ```bash
 go get github.com/projecttoyger/securityrules
 ```
