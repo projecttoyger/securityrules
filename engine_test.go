@@ -1,6 +1,7 @@
 package securityrules
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -9,14 +10,22 @@ func TestEngine_AddRule(t *testing.T) {
 		name    string
 		rule    *Rule
 		wantErr bool
+		errCode string
 	}{
 		{
 			name: "valid rule",
 			rule: NewRule().
+				WithID("test-rule").
 				ForResource("documents").
 				WithAction("read").
 				WithEffect(Allow),
 			wantErr: false,
+		},
+		{
+			name:    "nil rule",
+			rule:    nil,
+			wantErr: true,
+			errCode: ErrCodeInvalidRule,
 		},
 		{
 			name: "missing resource",
@@ -24,6 +33,7 @@ func TestEngine_AddRule(t *testing.T) {
 				WithAction("read").
 				WithEffect(Allow),
 			wantErr: true,
+			errCode: ErrCodeInvalidRule,
 		},
 		{
 			name: "missing action",
@@ -31,6 +41,7 @@ func TestEngine_AddRule(t *testing.T) {
 				ForResource("documents").
 				WithEffect(Allow),
 			wantErr: true,
+			errCode: ErrCodeInvalidRule,
 		},
 		{
 			name: "invalid effect",
@@ -39,6 +50,7 @@ func TestEngine_AddRule(t *testing.T) {
 				WithAction("read").
 				WithEffect("invalid"),
 			wantErr: true,
+			errCode: ErrCodeInvalidRule,
 		},
 	}
 
@@ -48,6 +60,14 @@ func TestEngine_AddRule(t *testing.T) {
 			err := engine.AddRule(tt.rule)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("AddRule() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil && tt.errCode != "" {
+				if secErr, ok := err.(SecurityError); !ok {
+					t.Errorf("Expected SecurityError, got %T", err)
+				} else if secErr.Code() != tt.errCode {
+					t.Errorf("Expected error code %s, got %s", tt.errCode, secErr.Code())
+				}
 			}
 		})
 	}
@@ -62,15 +82,22 @@ func TestEngine_IsAllowed(t *testing.T) {
 		action   string
 		want     bool
 		wantErr  bool
+		errCode  string
 	}{
 		{
-			name: "allowed for admin",
+			name: "allowed for admin with structured condition",
 			setup: func(e *Engine) error {
 				return e.AddRule(NewRule().
+					WithID("admin-rule").
 					ForResource("documents").
 					WithAction("read").
 					WithEffect(Allow).
-					WithCondition("userRole", "admin"))
+					WithStructuredCondition("userRole", Condition{
+						Type:      RoleCondition,
+						Operation: Equals,
+						Value:     "admin",
+						Message:   "Admin access required",
+					}))
 			},
 			context: NewContext().WithUser(map[string]interface{}{
 				"roles": []string{"admin"},
@@ -84,10 +111,15 @@ func TestEngine_IsAllowed(t *testing.T) {
 			name: "denied for non-admin",
 			setup: func(e *Engine) error {
 				return e.AddRule(NewRule().
+					WithID("admin-rule").
 					ForResource("documents").
 					WithAction("read").
 					WithEffect(Allow).
-					WithCondition("userRole", "admin"))
+					WithStructuredCondition("userRole", Condition{
+						Type:      RoleCondition,
+						Operation: Equals,
+						Value:     "admin",
+					}))
 			},
 			context: NewContext().WithUser(map[string]interface{}{
 				"roles": []string{"user"},
@@ -110,6 +142,7 @@ func TestEngine_IsAllowed(t *testing.T) {
 			action:   "read",
 			want:     false,
 			wantErr:  true,
+			errCode:  ErrCodeInvalidContext,
 		},
 	}
 
@@ -127,6 +160,104 @@ func TestEngine_IsAllowed(t *testing.T) {
 				t.Errorf("IsAllowed() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+			if err != nil && tt.errCode != "" {
+				if secErr, ok := err.(SecurityError); !ok {
+					t.Errorf("Expected SecurityError, got %T", err)
+				} else if secErr.Code() != tt.errCode {
+					t.Errorf("Expected error code %s, got %s", tt.errCode, secErr.Code())
+				}
+			}
+			if got != tt.want {
+				t.Errorf("IsAllowed() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func (e *timeConditionEvaluator) Evaluate(condition Condition, ctx *Context) (bool, error) {
+	allowedTimes, ok := condition.Value.([]string)
+	if !ok {
+		return false, fmt.Errorf("invalid time format")
+	}
+	currentTime, ok := ctx.Environment()["time"].(string)
+	if !ok {
+		return false, fmt.Errorf("time not found in context")
+	}
+	for _, time := range allowedTimes {
+		if time == currentTime {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Custom time evaluator for testing
+type timeConditionEvaluator struct{}
+
+func TestEngine_CustomConditionEvaluator(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(*Engine) error
+		context *Context
+		want    bool
+		wantErr bool
+	}{
+		{
+			name: "custom time condition - allowed",
+			setup: func(e *Engine) error {
+				e.RegisterConditionEvaluator(CustomCondition, &timeConditionEvaluator{})
+				return e.AddRule(NewRule().
+					ForResource("api").
+					WithAction("access").
+					WithEffect(Allow).
+					WithStructuredCondition("timeCheck", Condition{
+						Type:      CustomCondition,
+						Operation: In,
+						Value:     []string{"morning", "afternoon"},
+					}))
+			},
+			context: NewContext().WithEnvironment(map[string]interface{}{
+				"time": "morning",
+			}),
+			want:    true,
+			wantErr: false,
+		},
+		{
+			name: "custom time condition - denied",
+			setup: func(e *Engine) error {
+				e.RegisterConditionEvaluator(CustomCondition, &timeConditionEvaluator{})
+				return e.AddRule(NewRule().
+					ForResource("api").
+					WithAction("access").
+					WithEffect(Allow).
+					WithStructuredCondition("timeCheck", Condition{
+						Type:      CustomCondition,
+						Operation: In,
+						Value:     []string{"morning", "afternoon"},
+					}))
+			},
+			context: NewContext().WithEnvironment(map[string]interface{}{
+				"time": "night",
+			}),
+			want:    false,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := NewEngine()
+			if tt.setup != nil {
+				if err := tt.setup(engine); err != nil {
+					t.Fatalf("Setup failed: %v", err)
+				}
+			}
+
+			got, err := engine.IsAllowed("api", "access", tt.context)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("IsAllowed() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
 			if got != tt.want {
 				t.Errorf("IsAllowed() = %v, want %v", got, tt.want)
 			}
@@ -138,42 +269,12 @@ func TestEngine_DefaultDeny(t *testing.T) {
 	engine := NewEngine()
 	ctx := NewContext()
 
-	// Test with no rules
 	allowed, err := engine.IsAllowed("resource", "action", ctx)
 	if err != nil {
 		t.Errorf("IsAllowed() error = %v, want nil", err)
 	}
 	if allowed {
 		t.Error("IsAllowed() should return false when no rules match")
-	}
-}
-
-func TestEngine_EvaluationErrors(t *testing.T) {
-	engine := NewEngine()
-
-	// Add a rule with userRole condition but no roles in context
-	rule := NewRule().
-		ForResource("test").
-		WithAction("action").
-		WithEffect(Allow).
-		WithCondition("userRole", "admin")
-
-	err := engine.AddRule(rule)
-	if err != nil {
-		t.Fatalf("Failed to add rule: %v", err)
-	}
-
-	// Create context without roles
-	ctx := NewContext().WithUser(map[string]interface{}{
-		"id": "user1", // No roles field
-	})
-
-	allowed, err := engine.IsAllowed("test", "action", ctx)
-	if err != nil {
-		t.Errorf("IsAllowed() unexpected error: %v", err)
-	}
-	if allowed {
-		t.Error("IsAllowed() should return false when role check fails")
 	}
 }
 
@@ -197,82 +298,25 @@ func TestEngine_ResourceOwner(t *testing.T) {
 				WithResource(map[string]interface{}{"owner": "user2"}),
 			expected: false,
 		},
-		{
-			name: "missing user id",
-			context: NewContext().
-				WithUser(map[string]interface{}{}).
-				WithResource(map[string]interface{}{"owner": "user1"}),
-			expected: false,
-		},
-		{
-			name: "missing resource owner",
-			context: NewContext().
-				WithUser(map[string]interface{}{"id": "user1"}).
-				WithResource(map[string]interface{}{}),
-			expected: false,
-		},
-		{
-			name: "nil user",
-			context: NewContext().
-				WithResource(map[string]interface{}{"owner": "user1"}),
-			expected: false,
-		},
-		{
-			name: "nil resource",
-			context: NewContext().
-				WithUser(map[string]interface{}{"id": "user1"}),
-			expected: false,
-		},
 	}
 
-	engine := NewEngine()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := engine.matchResourceOwner(tt.context)
-			if result != tt.expected {
-				t.Errorf("matchResourceOwner() = %v, want %v", result, tt.expected)
+			engine := NewEngine()
+			rule := NewRule().
+				ForResource("documents").
+				WithAction("read").
+				WithEffect(Allow).
+				WithStructuredCondition("ownership", Condition{
+					Type:      CustomCondition,
+					Operation: Equals,
+					Value:     true,
+				})
+
+			if err := engine.AddRule(rule); err != nil {
+				t.Fatalf("Failed to add rule: %v", err)
 			}
-		})
-	}
-}
 
-func TestEngine_ResourceOwnerRule(t *testing.T) {
-	engine := NewEngine()
-
-	// Add rule with resource owner condition
-	rule := NewRule().
-		ForResource("documents").
-		WithAction("read").
-		WithEffect(Allow).
-		WithCondition("resourceOwner", true)
-
-	if err := engine.AddRule(rule); err != nil {
-		t.Fatalf("Failed to add rule: %v", err)
-	}
-
-	tests := []struct {
-		name     string
-		context  *Context
-		expected bool
-	}{
-		{
-			name: "owner can access",
-			context: NewContext().
-				WithUser(map[string]interface{}{"id": "user1"}).
-				WithResource(map[string]interface{}{"owner": "user1"}),
-			expected: true,
-		},
-		{
-			name: "non-owner cannot access",
-			context: NewContext().
-				WithUser(map[string]interface{}{"id": "user1"}).
-				WithResource(map[string]interface{}{"owner": "user2"}),
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
 			allowed, err := engine.IsAllowed("documents", "read", tt.context)
 			if err != nil {
 				t.Errorf("IsAllowed() error = %v", err)

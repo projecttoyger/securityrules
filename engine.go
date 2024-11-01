@@ -1,22 +1,47 @@
 package securityrules
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // Engine represents the security rules engine
 type Engine struct {
-	rules []Rule
-	mu    sync.RWMutex
+	rules               []Rule
+	conditionEvaluators map[ConditionType]ConditionEvaluator
+	mu                  sync.RWMutex
+}
+
+// ConditionEvaluator defines the interface for condition evaluation
+type ConditionEvaluator interface {
+	Evaluate(condition Condition, ctx *Context) (bool, error)
 }
 
 // NewEngine creates a new Engine instance
 func NewEngine() *Engine {
-	return &Engine{
-		rules: make([]Rule, 0),
+	engine := &Engine{
+		rules:               make([]Rule, 0),
+		conditionEvaluators: make(map[ConditionType]ConditionEvaluator),
 	}
+
+	// Register default evaluators
+	engine.registerDefaultEvaluators()
+	return engine
+}
+
+// RegisterConditionEvaluator registers a custom condition evaluator
+func (e *Engine) RegisterConditionEvaluator(condType ConditionType, evaluator ConditionEvaluator) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.conditionEvaluators[condType] = evaluator
 }
 
 // AddRule adds a rule to the engine
 func (e *Engine) AddRule(rule *Rule) error {
+	if rule == nil {
+		return NewInvalidRuleError("rule cannot be nil")
+	}
+
 	if err := rule.validate(); err != nil {
 		return err
 	}
@@ -30,7 +55,7 @@ func (e *Engine) AddRule(rule *Rule) error {
 // IsAllowed checks if an action is allowed
 func (e *Engine) IsAllowed(resource, action string, ctx *Context) (bool, error) {
 	if ctx == nil {
-		return false, &ErrInvalidContext{Message: "context is required"}
+		return false, NewInvalidContextError("context is required")
 	}
 
 	e.mu.RLock()
@@ -44,7 +69,7 @@ func (e *Engine) IsAllowed(resource, action string, ctx *Context) (bool, error) 
 	for _, rule := range matchingRules {
 		allowed, err := e.evaluateRule(rule, ctx)
 		if err != nil {
-			return false, err
+			return false, NewRuleEvaluationError(rule.ID, err.Error())
 		}
 		if !allowed {
 			return false, nil
@@ -67,30 +92,47 @@ func (e *Engine) findMatchingRules(resource, action string) []Rule {
 
 // evaluateRule evaluates a single rule against the context
 func (e *Engine) evaluateRule(rule Rule, ctx *Context) (bool, error) {
-	for key, condition := range rule.conditions {
-		switch key {
-		case "userRole":
-			if !e.matchUserRole(ctx, condition) {
-				return false, nil
-			}
-		case "resourceOwner":
-			if !e.matchResourceOwner(ctx) {
-				return false, nil
-			}
-			// Add more condition evaluators here
+	for key, condition := range rule.Conditions {
+		evaluator, exists := e.conditionEvaluators[condition.Type]
+		if !exists {
+			return false, fmt.Errorf("no evaluator registered for condition type: %s", condition.Type)
+		}
+
+		match, err := evaluator.Evaluate(condition, ctx)
+		if err != nil {
+			return false, NewInvalidConditionFieldError(key, err.Error())
+		}
+		if !match {
+			return false, nil
 		}
 	}
 
-	return rule.effect == Allow, nil
+	return rule.Effect == Allow, nil
 }
 
-// matchUserRole checks if the user has the required role
-func (e *Engine) matchUserRole(ctx *Context, requiredRole interface{}) bool {
+// registerDefaultEvaluators sets up the built-in condition evaluators
+func (e *Engine) registerDefaultEvaluators() {
+	// Role evaluator
+	e.RegisterConditionEvaluator(RoleCondition, &roleEvaluator{})
+
+	// Basic evaluator
+	e.RegisterConditionEvaluator(BasicCondition, &basicEvaluator{})
+
+	// Resource owner evaluator
+	e.RegisterConditionEvaluator(CustomCondition, &resourceOwnerEvaluator{})
+}
+
+// Built-in evaluators
+type roleEvaluator struct{}
+
+func (e *roleEvaluator) Evaluate(condition Condition, ctx *Context) (bool, error) {
+	requiredRole := condition.Value
+
 	// Try array format first
 	if roles, ok := ctx.User()["roles"].([]string); ok {
 		for _, role := range roles {
 			if role == requiredRole.(string) {
-				return true
+				return true, nil
 			}
 		}
 	}
@@ -98,15 +140,29 @@ func (e *Engine) matchUserRole(ctx *Context, requiredRole interface{}) bool {
 	// Try single role format
 	if role, ok := ctx.User()["role"].(string); ok {
 		if role == requiredRole.(string) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-// matchResourceOwner checks if the user owns the resource
-func (e *Engine) matchResourceOwner(ctx *Context) bool {
+type basicEvaluator struct{}
+
+func (e *basicEvaluator) Evaluate(condition Condition, ctx *Context) (bool, error) {
+	switch condition.Operation {
+	case Equals:
+		return condition.Value == ctx.User()["value"], nil
+	case NotEquals:
+		return condition.Value != ctx.User()["value"], nil
+	default:
+		return false, fmt.Errorf("unsupported operation: %s", condition.Operation)
+	}
+}
+
+type resourceOwnerEvaluator struct{}
+
+func (e *resourceOwnerEvaluator) Evaluate(condition Condition, ctx *Context) (bool, error) {
 	userID, userOK := ctx.User()["id"]
 	resourceOwner, resourceOK := ctx.Resource()["owner"]
-	return userOK && resourceOK && userID == resourceOwner
+	return userOK && resourceOK && userID == resourceOwner, nil
 }
